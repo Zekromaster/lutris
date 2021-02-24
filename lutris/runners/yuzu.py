@@ -4,6 +4,10 @@ import os
 from gettext import gettext as _
 from shutil import copyfile
 
+# Other utils
+import requests
+import re
+
 # Lutris Modules
 from lutris.runners.runner import Runner
 from lutris.util import system
@@ -15,7 +19,7 @@ class yuzu(Runner):
     platforms = [_("Nintendo Switch")]
     description = _("Nintendo Switch emulator")
     runnable_alone = True
-    runner_executable = "yuzu/yuzu"
+    runner_executable = "yuzu/mainline/yuzu"
     game_options = [
         {
             "option": "main_file",
@@ -35,6 +39,13 @@ class yuzu(Runner):
             "label": _("Title keys"),
             "type": "file",
             "help": _("File containing the title keys."),
+        },
+        {
+            "option": "fullscreen",
+            "label": _("Open game in fullscreen"),
+            "type": "bool",
+            "default": False,
+            "help": _("Tells Yuzu to launch the game in fullscreen."),
         }
     ]
 
@@ -47,12 +58,25 @@ class yuzu(Runner):
             if path:
                 return path[:-len("nand")]
 
+    @property
+    def download_url(self):
+        """The download URL for Yuzu"""
+        githubResponse = requests.get("https://api.github.com/repos/yuzu-emu/yuzu-mainline/releases/latest").json()
+        pattern = re.compile("yuzu-linux-(.*).7z")
+        linux_version = [x for x in githubResponse["assets"] if pattern.match(x["name"])][0]
+        print(linux_version)
+        return linux_version["browser_download_url"]
+        
+
     def play(self):
         """Run the game."""
         arguments = [self.get_executable()]
         rom = self.game_config.get("main_file") or ""
         if not system.path_exists(rom):
             return {"error": "FILE_NOT_FOUND", "file": rom}
+        if (self.runner_config.get("fullscreen")):
+            arguments.append("-f")
+        arguments.append("-g")
         arguments.append(rom)
         return {"command": arguments}
 
