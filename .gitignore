@@ -33,3 +33,5 @@ env
 
 # glade recovery files
 *.ui~
+
+.vscode
