@@ -15,6 +15,10 @@ from lutris.util.log import logger
 class HTTPError(Exception):
     """Exception raised on request failures"""
 
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
 
 class UnauthorizedAccess(Exception):
     """Exception raised for 401 HTTP errors"""
@@ -64,6 +68,9 @@ class Request:
         if url.startswith("/"):
             logger.error("Stop using relative URLs!: %s", url)
             url = SITE_URL + url
+        # That's for a single URL in EGS... not sure if we need more escaping
+        # The url received should already be receiving an escaped string
+        url = url.replace(" ", "%20")
         return url
 
     @property
@@ -84,7 +91,7 @@ class Request:
         except (urllib.error.HTTPError, CertificateError) as error:
             if error.code == 401:
                 raise UnauthorizedAccess("Access to %s denied" % self.url)
-            raise HTTPError("Request to %s failed: %s" % (self.url, error))
+            raise HTTPError("%s" % error, code=error.code)
         except (socket.timeout, urllib.error.URLError) as error:
             raise HTTPError("Unable to connect to server %s: %s" % (self.url, error))
         try:
@@ -121,7 +128,7 @@ class Request:
 
     def write_to_file(self, path):
         content = self.content
-        logger.info("Writing to %s", path)
+        logger.debug("Writing to %s", path)
         if not content:
             logger.warning("No content to write")
             return
@@ -133,11 +140,12 @@ class Request:
 
     @property
     def json(self):
-        if self.content:
+        _raw_json = self.text
+        if _raw_json:
             try:
-                return json.loads(self.text)
+                return json.loads(_raw_json)
             except json.decoder.JSONDecodeError:
-                raise ValueError("Invalid response ({}:{}): {}".format(self.url, self.status_code, self.text[:80]))
+                raise ValueError("JSON response from %s could not be decoded: '%s'" % (self.url, _raw_json[:80]))
         return {}
 
     @property
@@ -147,7 +155,7 @@ class Request:
         return ""
 
 
-def download_file(url, dest, overwrite=False):
+def download_file(url, dest, overwrite=False, raise_errors=False):
     """Save a remote resource locally"""
     if system.path_exists(dest):
         if overwrite:
@@ -159,6 +167,8 @@ def download_file(url, dest, overwrite=False):
     try:
         request = Request(url).get()
     except HTTPError as ex:
+        if raise_errors:
+            raise
         logger.error("Failed to get url %s: %s", url, ex)
         return None
     request.write_to_file(dest)

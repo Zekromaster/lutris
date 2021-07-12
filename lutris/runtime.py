@@ -9,8 +9,8 @@ from lutris import settings
 from lutris.util import http, jobs, system
 from lutris.util.downloader import Downloader
 from lutris.util.extract import extract_archive
+from lutris.util.linux import LINUX_SYSTEM
 from lutris.util.log import logger
-from lutris.util.system import LINUX_SYSTEM
 
 RUNTIME_DISABLED = os.environ.get("LUTRIS_RUNTIME", "").lower() in ("0", "off")
 DEFAULT_RUNTIME = "Ubuntu-18.04"
@@ -93,7 +93,8 @@ class Runtime:
         file_path = os.path.join(settings.RUNTIME_DIR, self.name, component["filename"])
         try:
             http.download_file(component["url"], file_path)
-        except http.HTTPError:
+        except http.HTTPError as ex:
+            logger.error("Failed to download runtime component %s: %s", component, ex)
             return
         return file_path
 
@@ -152,6 +153,12 @@ class Runtime:
         Arguments:
             path (str): local path to the runtime archive
         """
+        stats = os.stat(path)
+        if not stats.st_size:
+            logger.error("Download failed: file %s is empty, Deleting file.", path)
+            os.unlink(path)
+            self.updater.notify_finish(self)
+            return False
         directory, _filename = os.path.split(path)
 
         # Delete the existing runtime path
@@ -167,6 +174,7 @@ class Runtime:
         if error:
             logger.error("Runtime update failed")
             logger.error(error)
+            self.updater.notify_finish(self)
             return False
         archive_path, _destination_path = result
         logger.debug("Deleting runtime archive %s", archive_path)
@@ -212,7 +220,7 @@ class RuntimeUpdater:
 
             # Skip 32bit runtimes on 64 bit systems except the main runtime
             if (
-                runtime["architecture"] == "i386" and system.LINUX_SYSTEM.is_64_bit
+                runtime["architecture"] == "i386" and LINUX_SYSTEM.is_64_bit
                 and not runtime["name"].startswith(("Ubuntu", "lib32"))
             ):
                 logger.debug(
@@ -223,7 +231,7 @@ class RuntimeUpdater:
                 continue
 
             # Skip 64bit runtimes on 32 bit systems
-            if runtime["architecture"] == "x86_64" and not system.LINUX_SYSTEM.is_64_bit:
+            if runtime["architecture"] == "x86_64" and not LINUX_SYSTEM.is_64_bit:
                 logger.debug(
                     "Skipping runtime %s for %s",
                     runtime["name"],
@@ -242,7 +250,7 @@ class RuntimeUpdater:
 
 
 def get_env(version=None, prefer_system_libs=False, wine_path=None):
-    """Return a dict containing LD_LIBRARY_PATH and STEAM_RUNTIME env vars
+    """Return a dict containing LD_LIBRARY_PATH env var
 
     Params:
         version (str): Version of the runtime to use, such as "Ubuntu-18.04" or "legacy"
@@ -253,12 +261,9 @@ def get_env(version=None, prefer_system_libs=False, wine_path=None):
     Returns:
         dict
     """
-    # Adding the STEAM_RUNTIME here is probably unneeded and unwanted
     return {
         key: value
         for key, value in {
-            "STEAM_RUNTIME":
-            os.path.join(settings.RUNTIME_DIR, "steam") if not RUNTIME_DISABLED else None,
             "LD_LIBRARY_PATH":
             ":".join(get_paths(version=version, prefer_system_libs=prefer_system_libs, wine_path=wine_path)),
         }.items() if value
@@ -294,7 +299,7 @@ def get_runtime_paths(version=None, prefer_system_libs=True, wine_path=None):
         "steam/i386/usr/lib",
     ]
 
-    if system.LINUX_SYSTEM.is_64_bit:
+    if LINUX_SYSTEM.is_64_bit:
         if version == "legacy":
             lutris_runtime_path = "lib64"
         else:
@@ -323,6 +328,7 @@ def get_paths(version=None, prefer_system_libs=True, wine_path=None):
         paths = get_runtime_paths(version=version, prefer_system_libs=prefer_system_libs, wine_path=wine_path)
     else:
         paths = []
+    # Put existing LD_LIBRARY_PATH at the end
     if os.environ.get("LD_LIBRARY_PATH"):
         paths.append(os.environ["LD_LIBRARY_PATH"])
     return paths

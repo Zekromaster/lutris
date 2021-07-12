@@ -100,15 +100,6 @@ recommended to put this information directly in the ``game`` section. If you
 see an existing installer with keys like ``exe`` or ``main_file`` sitting at
 the root level, please move them to the ``game`` section.
 
-Customizing the game's name
----------------------------
-
-Use the ``custom-name`` directive to override the name of the game. Use this
-only if the installer provides a significantly different game from the base
-one.
-
-Example: ``custom-name: Quake Champions: Doom Edition``
-
 Requiring additional binaries
 -----------------------------
 
@@ -424,12 +415,15 @@ then it must be prefixed by either ``$CACHE`` or ``$GAMEDIR`` to move a file or
 directory from the download cache or the game's install dir, respectively.
 
 The ``dst`` parameter should be prefixed by either ``$GAMEDIR`` or ``$HOME``
-to move files to path relative to the game dir or the current user's home
+to move files to path relative to the game dir or the current user's home.
 
 If the source is a ``file ID``, it will be updated with the new destination
 path. It can then be used in following commands to access the moved file.
 
-The ``move`` command cannot overwrite files.
+The ``move`` command cannot overwrite files. If the destination directory
+doesn't exist, it will be created. Be sure to give the full path of the
+destination (including filename), not just the destination folder.
+
 
 Example::
 
@@ -802,7 +796,6 @@ Example Linux game::
       installer:
       - chmodx: $GAMEDIR/mygame
       system:
-        terminal: true
         env:
           SOMEENV: true
 
@@ -833,9 +826,7 @@ Example wine game::
         overrides:
           ddraw.dll: n
       system:
-        terminal: true
         env:
-          WINEDLLOVERRIDES: d3d11=
           SOMEENV: true
 
 Example gog wine game, some installer crash with with /SILENT or /VERYSILENT
@@ -865,15 +856,6 @@ there is undocumented gog option ``/NOGUI``, you need to use it when you use
           args: /SILENT /LANG=en /SP- /NOCANCEL /SUPPRESSMSGBOXES /NOGUI /DIR="C:/game"
           executable: installer
           name: wineexec
-      wine:
-        Desktop: true
-        overrides:
-          ddraw.dll: n
-      system:
-        terminal: true
-        env:
-          SOMEENV: true
-
 
 Example gog wine game, alternative (requires innoextract)::
 
@@ -899,13 +881,6 @@ Example gog wine game, alternative (requires innoextract)::
           description: Extracting game data
           dst: $GAMEDIR/drive_c/Games/YourGame
           src: $CACHE/app
-      wine:
-        Desktop: true
-        overrides:
-          ddraw.dll: n
-      system:
-        env:
-          SOMEENV: true
 
 
 Example gog linux game (mojosetup options found here https://www.reddit.com/r/linux_gaming/comments/42l258/fully_automated_gog_games_install_howto/)::
@@ -929,8 +904,7 @@ Example gog linux game (mojosetup options found here https://www.reddit.com/r/li
           file: installer
           description: Installing game, it will take a while...
           args: -- --i-agree-to-all-licenses --noreadme --nooptions --noprompt --destination=$GAMEDIR
-      system:
-        terminal: true
+
 
 Example gog linux game, alternative::
 
@@ -954,35 +928,7 @@ Example gog linux game, alternative::
       - merge:
           dst: $GAMEDIR
           src: $CACHE/GOG/data/noarch/
-      system:
-        terminal: true
 
-
-Example winesteam game::
-
-    name: My Game
-    game_slug: my-game
-    version: Installer
-    slug: my-game-installer
-    runner: winesteam
-
-    script:
-      game:
-        appid: 227300
-        args: --some-args
-        prefix: $GAMEDIR/prefix
-        arch: win64
-      installer:
-      - task:
-          description: Setting up wine prefix
-          name: create_prefix
-          prefix: $GAMEDIR/prefix
-          arch: win64
-      winesteam:
-        Desktop: true
-        WineDesktop: 1024x768
-        overrides:
-          ddraw.dll: n
 
 Example steam Linux game::
 

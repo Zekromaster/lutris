@@ -6,13 +6,12 @@ from gettext import gettext as _
 
 from lutris import settings
 from lutris.exceptions import UnavailableGame
-from lutris.gui.dialogs import WebConnectDialog
 from lutris.installer import AUTO_ELF_EXE, AUTO_WIN32_EXE
 from lutris.installer.installer_file import InstallerFile
 from lutris.services.base import OnlineService
 from lutris.services.service_game import ServiceGame
 from lutris.services.service_media import ServiceMedia
-from lutris.util import system
+from lutris.util import linux
 from lutris.util.http import HTTPError, Request
 from lutris.util.log import logger
 from lutris.util.strings import slugify
@@ -51,7 +50,6 @@ class HumbleBundleGame(ServiceGame):
 
 
 class HumbleBundleService(OnlineService):
-
     """Service for Humble Bundle"""
 
     id = "humblebundle"
@@ -59,6 +57,7 @@ class HumbleBundleService(OnlineService):
     name = _("Humble Bundle")
     icon = "humblebundle"
     online = True
+    drm_free = True
     medias = {
         "small_icon": HumbleSmallIcon,
         "icon": HumbleBundleIcon,
@@ -72,20 +71,14 @@ class HumbleBundleService(OnlineService):
 
     cookies_path = os.path.join(settings.CACHE_DIR, ".humblebundle.auth")
     token_path = os.path.join(settings.CACHE_DIR, ".humblebundle.token")
-    cache_path = os.path.join(settings.CACHE_DIR, "humblebundle-library/")
+    cache_path = os.path.join(settings.CACHE_DIR, "humblebundle/library/")
 
     supported_platforms = ("linux", "windows")
     is_loading = False
 
-    def request_token(self, url="", refresh_token=""):
-        """Dummy function, should not be here. Fix in WebConnectDialog"""
+    def login_callback(self, url):
+        """Called after the user has logged in successfully"""
         self.emit("service-login")
-
-    def login(self, parent=None):
-        """Connect to Humble Bundle"""
-        dialog = WebConnectDialog(self, parent)
-        dialog.set_modal(True)
-        dialog.show()
 
     def is_connected(self):
         """This doesn't actually check if the authentication
@@ -105,7 +98,6 @@ class HumbleBundleService(OnlineService):
         except ValueError:
             logger.error("Failed to get Humble Bundle library. Try logging out and back-in.")
             return
-        self.emit("service-games-load")
         humble_games = []
         seen = set()
         for game in library:
@@ -116,7 +108,6 @@ class HumbleBundleService(OnlineService):
         for game in humble_games:
             game.save()
         self.is_loading = False
-        self.emit("service-games-loaded")
         return humble_games
 
     def make_api_request(self, url):
@@ -338,7 +329,7 @@ def pick_download_url_from_download_info(download_info):
         bonus = 1
         if "deb" not in name:
             bonus = 2
-        if system.LINUX_SYSTEM.is_64_bit:
+        if linux.LINUX_SYSTEM.is_64_bit:
             if "386" in name or "32" in name:
                 return -1
         else:

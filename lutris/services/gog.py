@@ -8,9 +8,9 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 from lxml import etree
 
+import lutris.util.i18n as i18n
 from lutris import settings
 from lutris.exceptions import AuthenticationError, UnavailableGame
-from lutris.gui.dialogs import WebConnectDialog
 from lutris.installer import AUTO_ELF_EXE, AUTO_WIN32_EXE
 from lutris.installer.installer_file import InstallerFile
 from lutris.services.base import OnlineService
@@ -69,6 +69,7 @@ class GOGService(OnlineService):
     name = _("GOG")
     icon = "gog"
     has_extras = True
+    drm_free = True
     medias = {
         "banner_small": GogSmallBanner,
         "banner": GogMediumBanner,
@@ -109,13 +110,6 @@ class GOGService(OnlineService):
     def credential_files(self):
         return [self.cookies_path, self.token_path]
 
-    def login(self, parent=None):
-        """Connect to GOG"""
-        logger.debug("Connecting to GOG")
-        dialog = WebConnectDialog(self, parent)
-        dialog.set_modal(True)
-        dialog.show()
-
     def is_connected(self):
         """Return whether the user is authenticated and if the service is available"""
         if not self.is_authenticated():
@@ -136,14 +130,15 @@ class GOGService(OnlineService):
             logger.error("User not connected to GOG")
             return
         self.is_loading = True
-        self.emit("service-games-load")
         games = [GOGGame.new_from_gog_game(game) for game in self.get_library()]
         for game in games:
             game.save()
         self.match_games()
         self.is_loading = False
-        self.emit("service-games-loaded")
         return games
+
+    def login_callback(self, url):
+        return self.request_token(url)
 
     def request_token(self, url="", refresh_token=""):
         """Get authentication token from GOG"""
@@ -330,10 +325,18 @@ class GOGService(OnlineService):
                 filter_os = "linux"
             gog_installers = [installer for installer in gog_installers if installer["os"] != filter_os]
 
-        # Keep only the english installer until we have locale detection
-        # and / or language selection implemented
+        language = self.determine_language_installer(gog_installers, language)
         gog_installers = [installer for installer in gog_installers if installer["language"] == language]
         return gog_installers
+
+    def determine_language_installer(self, gog_installers, default_language):
+        """Return locale language string if available in gog_installers"""
+
+        language = i18n.get_lang()
+        gog_installers = [installer for installer in gog_installers if installer["language"] == language]
+        if not gog_installers:
+            language = default_language
+        return language
 
     def query_download_links(self, download):
         """Convert files from the GOG API to a format compatible with lutris installers"""
@@ -452,8 +455,7 @@ class GOGService(OnlineService):
             runner = "wine"
             game_config = {"exe": AUTO_WIN32_EXE}
             script = [
-                {"task": {"name": "create_prefix", "prefix": "$GAMEDIR"}},
-                {"task": {"name": "wineexec", "executable": "goginstaller", "args": "args: /SP- /NOCANCEL"}},
+                {"autosetup_gog_game": "goginstaller"},
             ]
         return {
             "name": db_game["name"],

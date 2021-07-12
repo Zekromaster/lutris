@@ -1,5 +1,4 @@
 """Main window for the Lutris interface."""
-# pylint: disable=no-member
 import os
 from collections import namedtuple
 from gettext import gettext as _
@@ -14,17 +13,18 @@ from lutris.game import Game
 from lutris.game_actions import GameActions
 from lutris.gui import dialogs
 from lutris.gui.config.add_game import AddGameDialog
-from lutris.gui.config.system import SystemConfigDialog
-from lutris.gui.dialogs.runners import RunnersDialog
+from lutris.gui.config.preferences_dialog import PreferencesDialog
 from lutris.gui.views import COL_ID, COL_NAME
 from lutris.gui.views.grid import GameGridView
 from lutris.gui.views.list import GameListView
+from lutris.gui.views.media_loader import download_icons
 from lutris.gui.views.store import GameStore
 from lutris.gui.widgets.contextual_menu import ContextualMenu
 from lutris.gui.widgets.game_bar import GameBar
 from lutris.gui.widgets.gi_composites import GtkTemplate
 from lutris.gui.widgets.sidebar import LutrisSidebar
 from lutris.gui.widgets.utils import load_icon_theme, open_uri
+# pylint: disable=no-member
 from lutris.services.base import BaseService
 from lutris.services.lutris import LutrisBanner, LutrisIcon, LutrisService
 from lutris.util import datapath
@@ -121,9 +121,8 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         self.connect("view-updated", self.update_store)
         GObject.add_emission_hook(BaseService, "service-login", self.on_service_login)
         GObject.add_emission_hook(BaseService, "service-logout", self.on_service_logout)
-        GObject.add_emission_hook(BaseService, "service-games-load", self.on_service_games_updating)
         GObject.add_emission_hook(BaseService, "service-games-loaded", self.on_service_games_updated)
-        GObject.add_emission_hook(Game, "game-updated", self.on_game_collection_changed)
+        GObject.add_emission_hook(Game, "game-updated", self.on_game_updated)
         GObject.add_emission_hook(Game, "game-removed", self.on_game_collection_changed)
 
     def _init_actions(self):
@@ -133,7 +132,6 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         actions = {
             "add-game": Action(self.on_add_game_button_clicked),
             "preferences": Action(self.on_preferences_activate),
-            "manage-runners": Action(self.on_manage_runners, ),
             "about": Action(self.on_about_clicked),
             "show-installed-only": Action(  # delete?
                 self.on_show_installed_state_change,
@@ -149,7 +147,6 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
                 type="b",
                 default=self.view_sorting_ascending,
             ),
-            "use-dark-theme": Action(self.on_dark_theme_state_change, type="b", default=self.use_dark_theme),
             "show-side-panel": Action(
                 self.on_side_panel_state_change,
                 type="b",
@@ -230,11 +227,6 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         return settings.read_setting("side_panel_visible").lower() != "false"
 
     @property
-    def use_dark_theme(self):
-        """Return whether to use the dark theme variant (if the theme provides one)"""
-        return settings.read_setting("dark_theme", default="false").lower() == "true"
-
-    @property
     def show_tray_icon(self):
         """Setting to hide or show status icon"""
         return settings.read_setting("show_tray_icon", default="false").lower() == "true"
@@ -285,13 +277,24 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
             return []
         api_games = api.search_games(self.filters["text"])
         if "icon" in self.icon_type:
-            GLib.idle_add(self.load_icons, {g["slug"]: g["icon_url"] for g in api_games}, LutrisIcon)
+            api_field = "icon_url"
+            _service_media = LutrisIcon
         else:
-            GLib.idle_add(self.load_icons, {g["slug"]: g["banner_url"] for g in api_games}, LutrisBanner)
+            api_field = "banner_url"
+            _service_media = LutrisBanner
+        AsyncCall(
+            download_icons,
+            self.icons_download_cb,
+            {g["slug"]: g[api_field] for g in api_games},
+            _service_media()
+        )
         return api_games
 
-    def load_icons(self, media_urls, service_media):
-        self.game_store.media_loader.download_icons(media_urls, service_media())
+    def icons_download_cb(self, result, error):
+        if error:
+            logger.error("Failed to download icons: %s", error)
+            return
+        self.game_store.update_icons(result)
 
     def game_matches(self, game):
         if self.filters.get("installed"):
@@ -307,7 +310,11 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         if not service_name:
             self.service = None
             return
-        self.service = services.get_services()[service_name]()
+        try:
+            self.service = services.SERVICES[service_name]()
+        except KeyError:
+            logger.error("Non existent service '%s'", service_name)
+            self.service = None
         return self.service
 
     @staticmethod
@@ -353,7 +360,7 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
     def get_games_from_filters(self):
         service_name = self.filters.get("service")
         self.tabs_box.hide()
-        if service_name in services.get_services():
+        if service_name in services.SERVICES:
             if service_name == "lutris":
                 self.tabs_box.show()  # Only the lutris service has the ability to search through all games.
                 if self.website_button.props.active:
@@ -378,12 +385,6 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
             excludes=excludes,
             sorts=self.sort_params
         )
-
-    def on_service_games_updating(self, service):
-        if not self.service or service.id != self.service.id:
-            return
-        self.show_spinner()
-        return True
 
     def get_sql_filters(self):
         """Return the current filters for the view"""
@@ -448,6 +449,7 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         for child in self.blank_overlay.get_children():
             child.destroy()
         games = self.get_games_from_filters()
+        logger.debug("Showing %d games", len(games))
         self.view.service = self.service.id if self.service else None
         GLib.idle_add(self.update_revealer)
         for game in games:
@@ -460,7 +462,10 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
     def set_dark_theme(self):
         """Enables or disables dark theme"""
         gtksettings = Gtk.Settings.get_default()
-        gtksettings.set_property("gtk-application-prefer-dark-theme", self.use_dark_theme)
+        gtksettings.set_property(
+            "gtk-application-prefer-dark-theme",
+            settings.read_setting("dark_theme", default="false").lower() == "true"
+        )
 
     def _bind_zoom_adjustment(self):
         """Bind the zoom slider to the supported banner sizes"""
@@ -488,11 +493,6 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         if icon_type != self.icon_type:
             self.save_icon_type(icon_type)
             self.show_spinner()
-            GLib.timeout_add(100, self._load_icons)
-
-    def _load_icons(self):
-        AsyncCall(self.game_store.load_icons, None)
-        return False
 
     def show_label(self, message):
         """Display a label in the middle of the UI"""
@@ -603,7 +603,7 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         return True
 
     def on_service_login(self, service):
-        AsyncCall(service.load, None)
+        AsyncCall(service.reload, None)
         return True
 
     def on_service_logout(self, service):
@@ -658,11 +658,7 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
     @GtkTemplate.Callback
     def on_preferences_activate(self, *_args):
         """Callback when preferences is activated."""
-        self.application.show_window(SystemConfigDialog)
-
-    @GtkTemplate.Callback
-    def on_manage_runners(self, *args):
-        self.application.show_window(RunnersDialog, transient_for=self)
+        self.application.show_window(PreferencesDialog)
 
     def on_show_installed_state_change(self, action, value):
         """Callback to handle uninstalled game filter switch"""
@@ -769,6 +765,7 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         else:
             game = games_db.get_game_by_field(int(game_id), "id")
         if not game:
+            logger.warning("Inspect this...")
             game = {
                 "id": game_id,
                 "appid": game_id,
@@ -780,6 +777,10 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
         GLib.idle_add(self.update_revealer, game)
         return False
 
+    def on_game_updated(self, game):
+        self.game_store.update(games_db.get_game_by_field(game.id, "id"))
+        return True
+
     def on_game_collection_changed(self, _sender):
         """Simple method used to refresh the view"""
         logger.debug("Game collection changed")
@@ -788,26 +789,34 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
 
     def on_game_activated(self, view, game_id):
         """Handles view activations (double click, enter press)"""
-        if self.service and self.service.id != "lutris":
+        initial_game_id = game_id
+        if self.service:
+            logger.debug("Looking up %s game %s", self.service.id, game_id)
             db_game = games_db.get_game_for_service(self.service.id, game_id)
-            if db_game:
+            if self.service.id == "lutris":
+                if not db_game:
+                    self.service.install(game_id)
+                    return
+                if not db_game["installed"]:
+                    self.service.install(game_id)
+                    return
                 game_id = db_game["id"]
             else:
-                db_game = ServiceGameCollection.get_game(self.service.id, game_id)
-                if db_game:
-                    self.service.install(db_game)
+                if db_game and db_game["installed"]:
+                    game_id = db_game["id"]
                 else:
-                    self.service.install(game_id)
-                return
-
-        if self.service and self.service.id == "lutris":
-            db_game = games_db.get_game_by_field(game_id)
-            if not db_game:
-                self.service.install(game_id)
-                return
-            if db_game["installed"] != 1:
-                self.service.install(game_id)
-                return
-            game_id = db_game["id"]
-        game = Game(game_id)
-        game.emit("game-launch")
+                    service_game = ServiceGameCollection.get_game(self.service.id, game_id)
+                    if not service_game:
+                        logger.error("No game %s found for %s". game_id, self.service.id)
+                        return
+                    game_id = self.service.install(service_game)
+        else:
+            logger.debug("No service for view")
+        if game_id:
+            game = Game(game_id)
+            if game.is_installed:
+                game.emit("game-launch")
+            else:
+                game.emit("game-install")
+        else:
+            logger.warning("No game found for %s", initial_game_id)
