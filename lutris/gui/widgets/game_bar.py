@@ -26,10 +26,13 @@ class GameBar(Gtk.Fixed):
         self.set_margin_bottom(12)
         self.game_actions = game_actions
         self.db_game = db_game
+        self.service = None
         if db_game.get("service"):
-            self.service = services.get_services()[db_game["service"]]()
-        else:
-            self.service = None
+            try:
+                self.service = services.SERVICES[db_game["service"]]()
+            except KeyError:
+                pass
+
         game_id = None
         if "service_id" in db_game:
             self.appid = db_game["service_id"]
@@ -47,8 +50,10 @@ class GameBar(Gtk.Fixed):
             game_actions.set_game(self.game)
         else:
             self.game = Game()
-        self.game_name = db_game["name"]
-        self.game_slug = db_game["slug"]
+            self.game.name = db_game["name"]
+            self.game.slug = db_game["slug"]
+            self.game.appid = self.appid
+            self.game.service = self.service.id if self.service else None
         self.update_view()
 
     def clear_view(self):
@@ -92,14 +97,14 @@ class GameBar(Gtk.Fixed):
 
     def get_icon(self):
         """Return the game icon"""
-        icon = Gtk.Image.new_from_pixbuf(get_pixbuf_for_game(self.game_slug, (32, 32)))
+        icon = Gtk.Image.new_from_pixbuf(get_pixbuf_for_game(self.game.slug, (32, 32)))
         icon.show()
         return icon
 
     def get_game_name_label(self):
         """Return the label with the game's title"""
         title_label = Gtk.Label(visible=True)
-        title_label.set_markup("<span font_desc='16'><b>%s</b></span>" % gtk_safe(self.game_name))
+        title_label.set_markup("<span font_desc='16'><b>%s</b></span>" % gtk_safe(self.game.name))
         return title_label
 
     def get_runner_button(self):
@@ -149,24 +154,32 @@ class GameBar(Gtk.Fixed):
         last_played_label.set_markup(_("Last played:\n<b>%s</b>") % lastplayed.strftime("%x"))
         return last_played_label
 
-    def get_play_button(self):
-        """Return the widget for install/play/stop and game config"""
-        if not self.game.is_installed and self.service:
-            button = Gtk.Button(visible=True)
-            button.set_size_request(120, 36)
-            button.set_label(_("Install"))
-            button.connect("clicked", self.on_install_clicked)
-            return button
-        box = Gtk.HBox(visible=True)
-        style_context = box.get_style_context()
-        style_context.add_class("linked")
-        button = Gtk.Button(visible=True)
-        button.set_size_request(84, 32)
+    def get_popover_button(self):
+        """Return the popover button+menu for the Play button"""
         popover_button = Gtk.MenuButton(visible=True)
         popover_button.set_size_request(32, 32)
         popover_button.props.direction = Gtk.ArrowType.UP
         popover = self.get_popover(self.get_game_buttons(), popover_button)
         popover_button.set_popover(popover)
+        return popover_button
+
+    def get_popover_box(self):
+        """Return a container for a button + a popover button attached to it"""
+        box = Gtk.HBox(visible=True)
+        style_context = box.get_style_context()
+        style_context.add_class("linked")
+        return box
+
+    def get_locate_installed_game_button(self):
+        """Return a button to locate an existing install"""
+        button = Gtk.Button("Locate installed game", visible=True)
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.connect("clicked", self.game_actions.on_locate_installed_game, self.game)
+        return button
+
+    def get_play_button(self):
+        """Return the widget for install/play/stop and game config"""
+        button = Gtk.Button(visible=True)
         if self.game.is_installed:
             if self.game.state == self.game.STATE_STOPPED:
                 button.set_label(_("Play"))
@@ -180,8 +193,21 @@ class GameBar(Gtk.Fixed):
         else:
             button.set_label(_("Install"))
             button.connect("clicked", self.game_actions.on_install_clicked)
+            if self.service:
+                if self.service.local:
+                    # Local services don't show an install dialog, they can be launched directly
+                    button.set_label(_("Play"))
+                button.set_size_request(120, 32)
+                if self.service.drm_free:
+                    box = Gtk.HBox(spacing=24, visible=True)
+                    box.add(button)
+                    box.add(self.get_locate_installed_game_button())
+                    return box
+                return button
+        button.set_size_request(84, 32)
+        box = self.get_popover_box()
         box.add(button)
-        box.add(popover_button)
+        box.add(self.get_popover_button())
         return box
 
     def get_game_buttons(self):

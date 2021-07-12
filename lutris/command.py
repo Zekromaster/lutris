@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import sys
+import uuid
 
 from gi.repository import GLib
 
@@ -123,6 +124,7 @@ class MonitoredCommand:
         env['PYTHONPATH'] = ':'.join(sys.path)
         # Drop bad values of environment keys, those will confuse the Python
         # interpreter.
+        env["LUTRIS_GAME_UUID"] = str(uuid.uuid4())
         return {key: value for key, value in env.items() if "=" not in key}
 
     def get_child_environment(self):
@@ -133,8 +135,8 @@ class MonitoredCommand:
 
     def start(self):
         """Run the thread."""
-        # for key, value in self.env.items():
-        #     logger.debug("%s=\"%s\"", key, value)
+        for key, value in self.env.items():
+            logger.debug("%s=\"%s\"", key, value)
         wrapper_command = self.get_wrapper_command()
         env = self.get_child_environment()
         self.game_process = self.execute_process(wrapper_command, env)
@@ -169,22 +171,30 @@ class MonitoredCommand:
             sys.stdout.write(line)
             sys.stdout.flush()
 
+    def get_return_code(self):
+        """Get the return code from the file written by the wrapper"""
+        return_code_path = "/tmp/lutris-%s" % self.env["LUTRIS_GAME_UUID"]
+        if os.path.exists(return_code_path):
+            with open(return_code_path) as return_code_file:
+                return_code = return_code_file.read()
+            os.unlink(return_code_path)
+        else:
+            return_code = ''
+            logger.warning("No file %s", return_code_path)
+        return return_code
+
     def on_stop(self, pid, _user_data):
         """Callback registered on game process termination"""
         if self.prevent_on_stop:  # stop() already in progress
             return False
-        if self.game_process.returncode is None:
-            logger.debug("Waiting for process to give a return code")
-            self.game_process.wait()
-        logger.debug("Process %s has terminated with code %s", pid, self.game_process.returncode)
+        self.game_process.wait()
+        self.return_code = self.get_return_code()
         self.is_running = False
-        self.return_code = self.game_process.returncode
-
+        logger.debug("Process %s has terminated with code %s", pid, self.return_code)
         resume_stop = self.stop()
         if not resume_stop:
             logger.info("Full shutdown prevented")
             return False
-
         return False
 
     def on_stdout_output(self, stdout, condition):

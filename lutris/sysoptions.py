@@ -1,15 +1,11 @@
 """Options list for system config."""
-# Standard Library
 import glob
-# pylint: disable=invalid-name
 import os
 from collections import OrderedDict
 from gettext import gettext as _
 
-# Lutris Modules
 from lutris import runners
-from lutris.discord import DiscordPresence
-from lutris.util import system
+from lutris.util import linux, system
 from lutris.util.display import DISPLAY_MANAGER, SCREEN_SAVER_INHIBITOR, USE_DRI_PRIME
 
 VULKAN_DATA_DIRS = [
@@ -80,8 +76,6 @@ def get_vk_icd_choices():
     return choices
 
 
-discord_presence = DiscordPresence()
-
 system_options = [  # pylint: disable=invalid-name
     {
         "option": "game_path",
@@ -134,16 +128,11 @@ system_options = [  # pylint: disable=invalid-name
         "help": _("Restrict the game to a single CPU core."),
     },
     {
-        "option":
-        "restore_gamma",
-        "type":
-        "bool",
-        "default":
-        False,
-        "label":
-        _("Restore gamma on game exit"),
-        "advanced":
-        True,
+        "option": "restore_gamma",
+        "type": "bool",
+        "default": False,
+        "label": _("Restore gamma on game exit"),
+        "advanced": True,
         "help": _("Some games don't correctly restores gamma on exit, making "
                   "your display too bright. Select this option to correct it."),
     },
@@ -182,7 +171,7 @@ system_options = [  # pylint: disable=invalid-name
         "label": _("Reduce PulseAudio latency"),
         "default": False,
         "advanced": True,
-        "condition": system.find_executable("pulseaudio"),
+        "condition": system.find_executable("pulseaudio") or system.find_executable("pipewire-pulse"),
         "help": _("Set the environment variable PULSE_LATENCY_MSEC=60 "
                   "to improve audio quality on some games"),
     },
@@ -195,18 +184,12 @@ system_options = [  # pylint: disable=invalid-name
         "help": _("Switch to US keyboard QWERTY layout while game is running"),
     },
     {
-        "option":
-        "optimus",
-        "type":
-        "choice",
-        "default":
-        "off",
-        "choices":
-        get_optirun_choices,
-        "label":
-        _("Optimus launcher (NVIDIA Optimus laptops)"),
-        "advanced":
-        True,
+        "option": "optimus",
+        "type": "choice",
+        "default": "off",
+        "choices": get_optirun_choices,
+        "label": _("Optimus launcher (NVIDIA Optimus laptops)"),
+        "advanced": True,
         "help": _("If you have installed the primus or bumblebee packages, "
                   "select what launcher will run the game with the command, "
                   "activating your NVIDIA graphic chip for high 3D "
@@ -251,18 +234,10 @@ system_options = [  # pylint: disable=invalid-name
         "help": _("Limit the game's FPS to desired number"),
     },
     {
-        "option": "aco",
-        "type": "bool",
-        "label": _("Enable ACO shader compiler"),
-        "condition": system.LINUX_SYSTEM.is_feature_supported("ACO"),
-        "help": _("Enable ACO shader compiler, improving performance in a lot of games. "
-                  "Requires Mesa 19.3 or later.")
-    },
-    {
         "option": "gamemode",
         "type": "bool",
-        "default": system.LINUX_SYSTEM.gamemode_available(),
-        "condition": system.LINUX_SYSTEM.gamemode_available,
+        "default": linux.LINUX_SYSTEM.gamemode_available(),
+        "condition": linux.LINUX_SYSTEM.gamemode_available,
         "label": _("Enable Feral GameMode"),
         "help": _("Request a set of optimisations be temporarily applied to the host OS"),
     },
@@ -334,8 +309,8 @@ system_options = [  # pylint: disable=invalid-name
         "option": "terminal_app",
         "label": _("Text based games emulator"),
         "type": "choice_with_entry",
-        "choices": system.get_terminal_apps,
-        "default": system.get_default_terminal(),
+        "choices": linux.get_terminal_apps,
+        "default": linux.get_default_terminal(),
         "advanced": True,
         "help": _("The terminal emulator used with the CLI mode. "
                   "Choose from the list of detected terminal apps or enter "
@@ -346,6 +321,13 @@ system_options = [  # pylint: disable=invalid-name
         "type": "mapping",
         "label": _("Environment variables"),
         "help": _("Environment variables loaded at run time"),
+    },
+    {
+        "option": "antimicro_config",
+        "type": "file",
+        "label": _("AntiMicroX Profile"),
+        "advanced": True,
+        "help": _("Path to an AntiMicroX profile file"),
     },
     {
         "option": "prefix_command",
@@ -474,49 +456,6 @@ system_options = [  # pylint: disable=invalid-name
         "help": _("Open Xephyr in fullscreen (at the desktop resolution)"),
     },
 ]
-
-discord_options = [
-    {
-        "option": "discord_rpc_enabled",
-        "type": "bool",
-        "label": _("Discord Rich Presence"),
-        "default": False,
-        "condition": discord_presence.available,
-        "help": _("Enable status to Discord of this game being played"),
-    },
-    {
-        "option": "discord_show_runner",
-        "type": "bool",
-        "label": _("Discord Show Runner"),
-        "default": True,
-        "condition": discord_presence.available,
-        "help": _("Embed the runner name in the Discord status"),
-    },
-    {
-        "option": "discord_custom_game_name",
-        "type": "string",
-        "label": _("Discord Custom Game Name"),
-        "condition": discord_presence.available,
-        "help": _("Custom name to override with and pass to Discord"),
-    },
-    {
-        "option": "discord_custom_runner_name",
-        "type": "string",
-        "label": _("Discord Custom Runner Name"),
-        "condition": discord_presence.available,
-        "help": _("Custom runner name to override with and pass to Discord"),
-    },
-    {
-        "option": "discord_client_id",
-        "type": "string",
-        "label": _("Discord Client ID"),
-        "condition": discord_presence.available,
-        "help": _("Custom Discord Client ID for passing status"),
-    },
-]
-
-if discord_presence.available:
-    system_options += discord_options
 
 
 def with_runner_overrides(runner_slug):

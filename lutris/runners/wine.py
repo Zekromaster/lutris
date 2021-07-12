@@ -21,13 +21,15 @@ from lutris.util.graphics.vkquery import is_vulkan_supported
 from lutris.util.jobs import thread_safe_call
 from lutris.util.log import logger
 from lutris.util.strings import parse_version, split_arguments
-from lutris.util.wine import dxvk, nine
-from lutris.util.wine.prefix import WinePrefixManager, find_prefix
+from lutris.util.wine import nine
+from lutris.util.wine.dxvk import DXVKManager
+from lutris.util.wine.dxvk_nvapi import DXVKNVAPIManager
+from lutris.util.wine.prefix import DEFAULT_DLL_OVERRIDES, WinePrefixManager, find_prefix
 from lutris.util.wine.wine import (
     POL_PATH, WINE_DIR, WINE_PATHS, detect_arch, display_vulkan_error, esync_display_limit_warning,
     esync_display_version_warning, fsync_display_support_warning, fsync_display_version_warning, get_default_version,
-    get_overrides_env, get_proton_paths, get_real_executable, get_system_wine_version, get_wine_versions,
-    is_esync_limit_set, is_fsync_supported, is_gstreamer_build, is_version_esync, is_version_fsync
+    get_overrides_env, get_proton_paths, get_real_executable, get_wine_version, get_wine_versions, is_esync_limit_set,
+    is_fsync_supported, is_gstreamer_build, is_version_esync, is_version_fsync
 )
 from lutris.util.wine.x360ce import X360ce
 
@@ -110,7 +112,7 @@ class wine(Runner):
 
     def __init__(self, config=None):  # noqa: C901
         super(wine, self).__init__(config)
-        self.dll_overrides = {"winemenubuilder.exe": "d"}
+        self.dll_overrides = DEFAULT_DLL_OVERRIDES
 
         def get_wine_version_choices():
             version_choices = [(_("Custom (select executable below)"), "custom")]
@@ -123,23 +125,12 @@ class wine(Runner):
             versions = get_wine_versions()
             for version in versions:
                 if version in labels.keys():
-                    version_number = get_system_wine_version(WINE_PATHS[version])
+                    version_number = get_wine_version(WINE_PATHS[version])
                     label = labels[version].format(version_number)
                 else:
                     label = version
                 version_choices.append((label, version))
             return version_choices
-
-        def dxvk_choices(manager_class):
-            version_choices = [
-                (_("Manual"), "manual"),
-            ]
-            for version in manager_class.versions:
-                version_choices.append((version, version))
-            return version_choices
-
-        def get_dxvk_choices():
-            return dxvk_choices(dxvk.DXVKManager())
 
         def esync_limit_callback(widget, option, config):
             limits_set = is_esync_limit_set()
@@ -225,8 +216,26 @@ class wine(Runner):
                 "label": _("DXVK version"),
                 "advanced": True,
                 "type": "choice_with_entry",
-                "choices": get_dxvk_choices,
-                "default": dxvk.DXVKManager().version,
+                "choices": DXVKManager().version_choices,
+                "default": DXVKManager().version,
+            },
+            {
+                "option": "dxvk_nvapi",
+                "label": _("Enable DXVK-NVAPI"),
+                "type": "bool",
+                "default": True,
+                "advanced": True,
+                "help": _(
+                    "Enable emulation of Nvidia's NVAPI, an interface which " 
+                    "provides additional features to various graphics APIs."),
+            },
+            {
+                "option": "dxvk_nvapi_version",
+                "label": _("DXVK NVAPI version"),
+                "advanced": True,
+                "type": "choice_with_entry",
+                "choices": DXVKNVAPIManager().version_choices,
+                "default": DXVKNVAPIManager().version,
             },
             {
                 "option": "esync",
@@ -235,6 +244,7 @@ class wine(Runner):
                 "callback": esync_limit_callback,
                 "callback_on": True,
                 "active": True,
+                "default": True,
                 "help": _(
                     "Enable eventfd-based synchronization (esync). "
                     "This will increase performance in applications "
@@ -506,7 +516,7 @@ class wine(Runner):
                 "type": "bool",
                 "label": _("Autoconfigure joypads"),
                 "advanced": True,
-                "default": True,
+                "default": False,
                 "help":
                 _("Automatically disables one of Wine's detected joypad "
                   "to avoid having 2 controllers detected"),
@@ -575,10 +585,10 @@ class wine(Runner):
             logger.warning("The game doesn't have an executable")
             return
         if exe and os.path.isabs(exe):
-            return exe
+            return system.fix_path_case(exe)
         if not self.game_path:
             return
-        exe = os.path.join(self.game_path, exe)
+        exe = system.fix_path_case(os.path.join(self.game_path, exe))
         if system.path_exists(exe):
             return exe
 
@@ -795,53 +805,45 @@ class wine(Runner):
 
                 prefix_manager.set_registry_key(path, key, value)
 
-    def toggle_dxvk(self, enable, version=None, dxvk_manager: dxvk.DXVKManager = None):
+    def setup_dlls(self, manager_class, enable, version):
+        """Enable or disable DLLs"""
+        dll_manager = manager_class(
+            self.prefix_path,
+            arch=self.wine_arch,
+            version=version,
+        )
         # manual version only sets the dlls to native
-        if version.lower() != "manual":
+        if dll_manager.version.lower() != "manual":
             if enable:
-                if not dxvk_manager.is_available():
-                    logger.info("DXVK %s is not available yet, downloading...", version)
-                    dxvk_manager.download()
-                dxvk_manager.enable()
+                dll_manager.enable()
             else:
-                dxvk_manager.disable()
+                dll_manager.disable()
 
         if enable:
-            for dll in dxvk_manager.dxvk_dlls:
+            for dll in dll_manager.managed_dlls:
                 # We have to make sure that the dll exists before setting it to native
-                if dxvk_manager.dxvk_dll_exists(dll):
+                if dll_manager.dll_exists(dll):
                     self.dll_overrides[dll] = "n"
-
-    def setup_dxvk(self, base_name, dxvk_manager: dxvk.DXVKManager = None):
-        if not dxvk_manager:
-            return
-        try:
-            self.toggle_dxvk(
-                bool(self.runner_config.get(base_name)),
-                version=dxvk_manager.version,
-                dxvk_manager=dxvk_manager,
-            )
-        except dxvk.UnavailableDXVKVersion:
-            raise GameConfigError("Unable to get " + base_name.upper() + " %s" % dxvk_manager.version)
 
     def prelaunch(self):
         if not system.path_exists(os.path.join(self.prefix_path, "user.reg")):
             create_prefix(self.prefix_path, arch=self.wine_arch)
         prefix_manager = WinePrefixManager(self.prefix_path)
-        if self.runner_config.get("autoconf_joypad", True):
+        if self.runner_config.get("autoconf_joypad", False):
             prefix_manager.configure_joypads()
         self.sandbox(prefix_manager)
         self.set_regedit_keys()
         self.setup_x360ce(self.runner_config.get("x360ce-path"))
-        self.setup_dxvk(
-            "dxvk",
-            dxvk_manager=dxvk.DXVKManager(
-                self.prefix_path,
-                arch=self.wine_arch,
-                version=self.runner_config.get("dxvk_version"),
-            )
+        self.setup_dlls(
+            DXVKManager,
+            bool(self.runner_config.get("dxvk")),
+            self.runner_config.get("dxvk_version")
         )
-
+        self.setup_dlls(
+            DXVKNVAPIManager,
+            bool(self.runner_config.get("dxvk_nvapi")),
+            self.runner_config.get("dxvk_nvapi_version")
+        )
         try:
             self.setup_nine(
                 bool(self.runner_config.get("gallium_nine")),
@@ -876,11 +878,10 @@ class wine(Runner):
         env["WINEARCH"] = self.wine_arch
         env["WINE"] = self.get_executable()
         if is_gstreamer_build(self.get_executable()):
-            env["GST_PLUGIN_SYSTEM_PATH_1_0"] = (
-                os.path.join(WINE_DIR, self.get_version(), "lib64/gstreamer-1.0/")
-                + ":"
-                + os.path.join(WINE_DIR, self.get_version(), "lib/gstreamer-1.0/")
-            )
+            path_64 = os.path.join(WINE_DIR, self.get_version(), "lib64/gstreamer-1.0/")
+            path_32 = os.path.join(WINE_DIR, self.get_version(), "lib/gstreamer-1.0/")
+            if os.path.exists(path_64) or os.path.exists(path_32):
+                env["GST_PLUGIN_SYSTEM_PATH_1_0"] = path_64 + ":" + path_32
         if self.prefix_path:
             env["WINEPREFIX"] = self.prefix_path
 

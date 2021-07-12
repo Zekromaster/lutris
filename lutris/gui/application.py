@@ -1,6 +1,6 @@
-# pylint: disable=no-member,wrong-import-position
+# pylint: disable=wrong-import-position
 #
-# Copyright (C) 2020 Mathieu Comandon <strider@strycore.com>
+# Copyright (C) 2021 Mathieu Comandon <strider@strycore.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -49,7 +49,7 @@ from lutris.util.http import HTTPError, Request
 from lutris.util.log import logger
 from lutris.util.steam.appmanifest import AppManifest, get_appmanifests
 from lutris.util.steam.config import get_steamapps_paths
-from lutris.services import get_services
+from lutris.services import get_enabled_services
 from lutris.database.services import ServiceGameCollection
 
 from .lutriswindow import LutrisWindow
@@ -212,7 +212,7 @@ class Application(Gtk.Application):
     def do_activate(self):  # pylint: disable=arguments-differ
         if not self.window:
             self.window = LutrisWindow(application=self)
-            screen = self.window.props.screen
+            screen = self.window.props.screen  # pylint: disable=no-member
             Gtk.StyleContext.add_provider_for_screen(screen, self.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         if not self.run_in_background:
             self.window.present()
@@ -231,7 +231,12 @@ class Application(Gtk.Application):
         Returns:
             Gtk.Window: the existing window instance or a newly created one
         """
-        window_key = str(window_class) + str(kwargs)
+        if kwargs.get("appid"):
+            window_key = str(window_class) + kwargs["appid"]
+        elif kwargs.get("runner"):
+            window_key = str(window_class) + kwargs["runner"].name
+        else:
+            window_key = str(window_class) + str(kwargs)
         if self.app_windows.get(window_key):
             self.app_windows[window_key].present()
             return self.app_windows[window_key]
@@ -241,6 +246,8 @@ class Application(Gtk.Application):
             window_inst = window_class(application=self, **kwargs)
         window_inst.connect("destroy", self.on_app_window_destroyed, str(kwargs))
         self.app_windows[window_key] = window_inst
+        logger.debug("Showing window %s", window_key)
+        window_inst.show()
         return window_inst
 
     def show_installer_window(self, installers, service=None, appid=None):
@@ -256,8 +263,10 @@ class Application(Gtk.Application):
         window_key = str(app_window.__class__) + kwargs_str
         try:
             del self.app_windows[window_key]
+            logger.debug("Removed window %s", window_key)
         except KeyError:
-            pass
+            logger.warning("Failed to remove window %s", window_key)
+            logger.info("Available windows: %s", ", ".join(self.app_windows.keys()))
         return True
 
     @staticmethod
@@ -311,7 +320,6 @@ class Application(Gtk.Application):
             logger.setLevel(logging.NOTSET)
             return 0
 
-        logger.info("Lutris %s", settings.VERSION)
         migrate()
         run_all_checks()
 
@@ -472,11 +480,16 @@ class Application(Gtk.Application):
     def on_game_install(self, game):
         """Request installation of a game"""
         if game.service:
-            service = get_services()[game.service]()
+            service = get_enabled_services()[game.service]()
             db_game = ServiceGameCollection.get_game(service.id, game.appid)
-            service.install(db_game)
+            game_id = service.install(db_game)
+            if game_id:
+                game = Game(game_id)
+                game.launch()
             return True
-
+        if not game.slug:
+            raise ValueError("Invalid game passed: %s" % game)
+            # return True
         installers = get_installers(game_slug=game.slug)
         if installers:
             self.show_installer_window(installers)

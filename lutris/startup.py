@@ -11,11 +11,13 @@ from lutris.game import Game
 from lutris.gui.dialogs import DontShowAgainDialog
 from lutris.runners.json import load_json_runners
 from lutris.runtime import RuntimeUpdater
+from lutris.services import DEFAULT_SERVICES
 from lutris.util.graphics import drivers, vkquery
 from lutris.util.linux import LINUX_SYSTEM
 from lutris.util.log import logger
 from lutris.util.system import create_folder
-from lutris.util.wine.dxvk import DXVKManager, fetch_dxvk_versions
+from lutris.util.wine.dxvk import DXVKManager
+from lutris.util.wine.dxvk_nvapi import DXVKNVAPIManager
 
 
 def init_dirs():
@@ -153,10 +155,11 @@ def run_all_checks():
 
 def init_lutris():
     """Run full initialization of Lutris"""
-    logger.info("Initializing lutris")
+    logger.info("Starting Lutris %s", settings.VERSION)
     runners.inject_runners(load_json_runners())
-    # Load runner names
+    # Load runner names and platforms
     runners.RUNNER_NAMES = runners.get_runner_names()
+    runners.RUNNER_PLATFORMS = runners.get_platforms()
     init_dirs()
     try:
         syncdb()
@@ -165,6 +168,9 @@ def init_lutris():
             "Failed to open database file in %s. Try renaming this file and relaunch Lutris" %
             settings.PGA_DB
         )
+    for service in DEFAULT_SERVICES:
+        if not settings.read_setting(service, section="services"):
+            settings.write_setting(service, True, section="services")
 
     if os.environ.get("LUTRIS_SKIP_INIT"):
         logger.info("Skipping initialization")
@@ -174,9 +180,7 @@ def init_lutris():
     if components_to_update:
         while runtime_updater.current_updates:
             time.sleep(0.3)
-    fetch_dxvk_versions()
-    dxvk_manager = DXVKManager()
-    if not dxvk_manager.is_available():
-        logger.info("DXVK %s not available, downloading...", dxvk_manager.version)
-        dxvk_manager.download()
-    logger.info("Runtime updated. Initialization complete.")
+    for dll_manager_class in (DXVKManager, DXVKNVAPIManager):
+        dll_manager = dll_manager_class()
+        dll_manager.upgrade()
+    logger.info("Startup complete")

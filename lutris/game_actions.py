@@ -3,7 +3,6 @@
 # Standard Library
 # pylint: disable=too-many-public-methods
 import os
-import signal
 from gettext import gettext as _
 
 from gi.repository import Gio
@@ -22,7 +21,6 @@ from lutris.util.system import path_exists
 
 
 class GameActions:
-
     """Regroup a list of callbacks for a game"""
 
     def __init__(self, application=None, window=None):
@@ -139,22 +137,15 @@ class GameActions:
                 return self.game
         logger.warning("Game %s not in %s", self.game_id, ids)
 
-    def on_game_stop(self, caller):  # pylint: disable=unused-argument
+    def on_game_stop(self, _caller):
         """Stops the game"""
-        matched_game = self.get_running_game()
-        if not matched_game:
-            return
-        if not matched_game.game_thread:
-            logger.warning("Game %s doesn't appear to be running, not killing it", self.game_id)
-            return
-        try:
-            os.kill(matched_game.game_thread.game_process.pid, signal.SIGTERM)
-        except ProcessLookupError as ex:
-            logger.debug("Failed to kill game process: %s", ex)
+        game = self.get_running_game()
+        if game:
+            game.force_stop()
 
     def on_show_logs(self, _widget):
         """Display game log"""
-        _buffer = LOG_BUFFERS.get(self.game.id)
+        _buffer = LOG_BUFFERS.get(str(self.game.id))
         if not _buffer:
             logger.info("No log for game %s", self.game)
         return LogWindow(
@@ -166,11 +157,21 @@ class GameActions:
     def on_install_clicked(self, *_args):
         """Install a game"""
         # Install the currently selected game in the UI
+        if not self.game.slug:
+            raise RuntimeError("No game to install: %s" % self.game.id)
         self.game.emit("game-install")
+
+    def on_locate_installed_game(self, _button, game):
+        """Show the user a dialog to import an existing install to a DRM free service
+
+        Params:
+            game (Game): Game instance without a database ID, populated with a fields the service can provides
+        """
+        AddGameDialog(self.window, game=game)
 
     def on_add_manually(self, _widget, *_args):
         """Callback that presents the Add game dialog"""
-        AddGameDialog(self.window, game=self.game, runner=self.game.runner_name)
+        return AddGameDialog(self.window, game=self.game, runner=self.game.runner_name)
 
     def on_edit_game_configuration(self, _widget):
         """Edit game preferences"""
